@@ -1,14 +1,17 @@
+"""Scraper for scraping all BU courses and their information"""
+
 import json
 import re
 from multiprocessing import Pool
 from pathlib import Path
-from tqdm import tqdm
 
 import requests
-from bs4 import BeautifulSoup, element
+from bs4 import BeautifulSoup
 
 
 class Scraper:
+    """Scraper class for scraping all BU courses and their information"""
+
     def __init__(self):
         self.branches = {
             'khc': 'Kilachand Honors College',
@@ -33,18 +36,20 @@ class Scraper:
             'wheelock': 'Wheelock College of Education & Human Development',
         }
 
-        self.class_list = []
-        self.class_info = {}
+        self.class_list: list = []
+        self.class_info: dict = {}
 
 
     def run(self):
         """Runs the scraper"""
+
         self.scrape_branches()
         self.scrape_courses()
         self.save()
 
     def save(self):
         """Saves the scraped data to a json file"""
+
         with open(Path(__file__).parent / 'data.json', 'w', encoding='utf-8') as f:
             json.dump(self.class_info, f, indent=4)
 
@@ -90,14 +95,15 @@ class Scraper:
         """Scrapes all courses w/ multiprocessing"""
 
         with Pool() as p:
-            self.class_info = p.map(self.fetch_single_course, self.class_list)
+            tmp = p.map(self.fetch_single_course, self.class_list)
 
-        self.class_info = {k: v for d in self.class_info for k, v in d.items()}
+        self.class_info = {k: v for d in tmp for k, v in d.items()}
 
         return
 
     def fetch_single_course(self, course: str) -> dict:
         """Fetches a single course"""
+
         code = [course[:3], course[3:5], course[5:]]
         url = f'https://www.bu.edu/phpbin/course-search/search.php?page=w0& \
             pagesize=10&adv=1&search_adv_all={code[0]}+{code[1]}+{code[2]}&yearsem_adv=*'
@@ -136,6 +142,7 @@ class Scraper:
 
     def cleaner(self, contents: dict) -> dict:
         """Cleans the contents of the course"""
+
         # Description cleaner
         while True:
             if '  ' in contents['description']:
@@ -165,11 +172,13 @@ class Scraper:
 
     def filter_numerical(self, string: str) -> str:
         """Filters out all non-numerical characters from a string"""
+
         result = ''
         for char in string:
             if char in '1234567890':
                 result += char
         return result
+
 
 if __name__ == '__main__':
     scraper = Scraper()
