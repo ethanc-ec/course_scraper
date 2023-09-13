@@ -1,9 +1,10 @@
 """Scraper for scraping all BU courses and their information"""
 
-import json
 import re
+from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
+import pandas as pd
 
 import requests
 from bs4 import BeautifulSoup
@@ -37,29 +38,29 @@ class Scraper:
         }
 
         self.class_list: list = []
-        self.class_info: dict = {}
+        self.class_info: pd.DataFrame = pd.DataFrame( \
+            columns=['course', 'prereq', 'coreq', 'description', 'credit', 'hub_credit'])
 
 
-    def run(self):
+    def run(self) -> None:
         """Runs the scraper"""
 
         self.scrape_branches()
         self.scrape_courses()
         self.save()
 
-    def save(self):
+    def save(self) -> None:
         """Saves the scraped data to a json file"""
 
-        with open(Path(__file__).parent / 'data.json', 'w', encoding='utf-8') as f:
-            json.dump(self.class_info, f, indent=4)
+        self.class_info.to_csv(Path(__file__).parent / 'courses.csv', index=False)
 
     def scrape_branches(self) -> None:
         """Scrapes all branches w/ multiprocessing"""
 
-        with Pool() as p:
-            self.class_list = p.map(self.fetch_single_branch, self.branches.keys())
+        with Pool() as pool:
+            self.class_list = pool.map(self.fetch_single_branch, self.branches.keys())
 
-        self.class_list = [item for sublist in self.class_list for item in sublist]
+        self.class_list = list(set([item for sublist in self.class_list for item in sublist]))
 
         return
 
@@ -80,28 +81,32 @@ class Scraper:
             group = []
             for content in results:
                 tmp = content.next_sibling
+
                 if tmp is None or len(tmp.text.strip()) == 0:
                     continue
+
                 else:
                     class_code = tmp.text.split(':')[0].strip().replace(' ', '').lower()
                     group.append(class_code)
 
             for i in group:
                 whole_branch.append(i)
-        print(f'Fetched: {self.branches[branch]}')
+
         return whole_branch
 
     def scrape_courses(self) -> None:
         """Scrapes all courses w/ multiprocessing"""
 
-        with Pool() as p:
-            tmp = p.map(self.fetch_single_course, self.class_list)
+        with Pool() as pool:
+            tmp = pool.map(self.fetch_single_course, self.class_list)
 
-        self.class_info = {k: v for d in tmp for k, v in d.items()}
+        tmp = [i for i in tmp if i is not False]
+
+        self.class_info = pd.DataFrame(tmp)
 
         return
 
-    def fetch_single_course(self, course: str) -> dict:
+    def fetch_single_course(self, course: str) -> dict | bool:
         """Fetches a single course"""
 
         code = [course[:3], course[3:5], course[5:]]
@@ -109,6 +114,16 @@ class Scraper:
             pagesize=10&adv=1&search_adv_all={code[0]}+{code[1]}+{code[2]}&yearsem_adv=*'
 
         content = BeautifulSoup(requests.get(url, timeout=(9.05, 27)).content, 'html.parser')
+
+        if content.find('div', class_="coursearch-result-content-description") is None:
+            cur_datetime = datetime.now()
+            semester = 'FALL' if cur_datetime.month > 6 else 'SPRG'
+            year = cur_datetime.year
+
+            url = f'https://www.bu.edu/phpbin/course-search/search.php?page=w0&pagesize=10 \
+                &adv=1&search_adv_all={code[0]}+{code[1]}+{code[2]}&yearsem_adv={year}-{semester}'
+
+            content = BeautifulSoup(requests.get(url, timeout=(9.05, 27)).content, 'html.parser')
 
         hub_list = content.find('ul', class_="coursearch-result-hub-list")
         hub_list = str(hub_list).split('<li>')
@@ -126,19 +141,24 @@ class Scraper:
         full = content.find('div', class_="coursearch-result-content-description")
 
         # Gets: [prereq, coreq,description, numerical credit]
-        full_list = full.text.splitlines()
+        try:
+            full_list = full.text.splitlines()
+            
+        except AttributeError:
+            return False
 
         full_dict = {
+            'course': course,
             'prereq': full_list[1],
             'coreq': full_list[3],
             'description': full_list[5],
             'credit': full_list[6],
             'hub_credit': hub_list[:]
         }
-        
-        print(f'Fetched: {course}')
-        
-        return {course: self.cleaner(full_dict)}
+
+        print(f'Finished scraping {course}')
+
+        return self.cleaner(full_dict)
 
     def cleaner(self, contents: dict) -> dict:
         """Cleans the contents of the course"""
@@ -156,6 +176,7 @@ class Scraper:
         # Removing the 'Prereq:' or 'Coreq:' from the respective entries
         if 'Prereq:' in contents['prereq']:
             contents['prereq'] = contents['prereq'].replace('Prereq:', '')
+
         if 'Coreq:' in contents['coreq']:
             contents['coreq'] = contents['coreq'].replace('Coreq:', '')
 
@@ -168,16 +189,24 @@ class Scraper:
             elif isinstance(contents[i], str):
                 contents[i] = contents[i].strip()
 
+                if len(contents[i]) == 1 or len(contents[i]) == 0:
+                    contents[i] = None
+
         return contents
 
     def filter_numerical(self, string: str) -> str:
         """Filters out all non-numerical characters from a string"""
 
         result = ''
+
+        if 'var' in string.lower():
+            return 'var'
+
         for char in string:
             if char in '1234567890':
                 result += char
-        return result
+
+        return str(result)
 
 
 if __name__ == '__main__':
