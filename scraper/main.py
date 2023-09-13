@@ -1,11 +1,12 @@
 """Scraper for scraping all BU courses and their information"""
 
 import re
+import sqlite3
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
-import pandas as pd
 
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
@@ -40,6 +41,8 @@ class Scraper:
         self.class_list: list = []
         self.class_info: pd.DataFrame = pd.DataFrame( \
             columns=['course', 'prereq', 'coreq', 'description', 'credit', 'hub_credit'])
+        
+        self.parent = Path(__file__).parent
 
 
     def run(self) -> None:
@@ -47,12 +50,21 @@ class Scraper:
 
         self.scrape_branches()
         self.scrape_courses()
-        self.save()
+        self.create_csv()
+        self.create_db()
 
-    def save(self) -> None:
-        """Saves the scraped data to a json file"""
+    def create_csv(self) -> None:
+        """Saves the scraped data to a csv file"""
 
-        self.class_info.to_csv(Path(__file__).parent / 'courses.csv', index=False)
+        self.class_info.to_csv(self.parent / 'courses.csv', index=False)
+        
+    def create_db(self) -> None:
+        """Saves the scraped data to a database"""
+
+        csv = pd.read_csv(f'{self.parent}/courses.csv')
+        conn = sqlite3.connect(f'{self.parent}/courses.db')
+
+        csv.to_sql('courses', conn, if_exists='replace', index=False)
 
     def scrape_branches(self) -> None:
         """Scrapes all branches w/ multiprocessing"""
@@ -189,8 +201,12 @@ class Scraper:
             elif isinstance(contents[i], str):
                 contents[i] = contents[i].strip()
 
-                if len(contents[i]) == 1 or len(contents[i]) == 0:
-                    contents[i] = None
+                try:
+                    int(contents[i])
+                    
+                except ValueError:
+                    if len(contents[i]) == 1 or len(contents[i]) == 0:
+                        contents[i] = None
 
         return contents
 
@@ -206,7 +222,7 @@ class Scraper:
             if char in '1234567890':
                 result += char
 
-        return str(result)
+        return result
 
 
 if __name__ == '__main__':
