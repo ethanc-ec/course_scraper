@@ -1,7 +1,6 @@
 """Scraper for scraping all BU courses and their information"""
 
 import re
-import sqlite3
 from datetime import datetime
 from multiprocessing import Pool
 from pathlib import Path
@@ -9,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+from google.cloud import bigquery
 
 
 class Scraper:
@@ -41,9 +41,8 @@ class Scraper:
         self.class_list: list = []
         self.class_info: pd.DataFrame = pd.DataFrame( \
             columns=['course', 'prereq', 'coreq', 'description', 'credit', 'hub_credit'])
-        
-        self.parent = Path(__file__).parent
 
+        self.parent = Path(__file__).parent
 
     def run(self) -> None:
         """Runs the scraper"""
@@ -51,35 +50,58 @@ class Scraper:
         self.scrape_branches()
         self.scrape_courses()
         self.create_csv()
-        self.create_db()
+
+    def push_to_bigquery(self) -> None:
+        """Pushes the scraped data to BigQuery"""
+
+        print('Started: Pushing to BigQuery')
+        # Construct a BigQuery client object.
+        client = bigquery.Client()
+
+        # Use own table id
+        table_id = ""
+
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        )
+
+        body = pd.read_csv("scraper/courses.csv")
+        load_job = client.load_table_from_dataframe(body, table_id, job_config=job_config).result()
+
+        load_job.result()  # Waits for the job to complete.
+
+        destination_table = client.get_table(table_id).num_rows
+
+        if destination_table is not None:
+            print(f"Loaded {destination_table} rows.")
+
+        return
 
     def create_csv(self) -> None:
         """Saves the scraped data to a csv file"""
 
         self.class_info.to_csv(self.parent / 'courses.csv', index=False)
-        
-    def create_db(self) -> None:
-        """Saves the scraped data to a database"""
-
-        csv = pd.read_csv(f'{self.parent}/courses.csv')
-        conn = sqlite3.connect(f'{self.parent}/courses.db')
-
-        csv.to_sql('courses', conn, if_exists='replace', index=False)
 
     def scrape_branches(self) -> None:
         """Scrapes all branches w/ multiprocessing"""
+
+        print('Started: All branches')
 
         with Pool() as pool:
             self.class_list = pool.map(self.fetch_single_branch, self.branches.keys())
 
         self.class_list = list(set([item for sublist in self.class_list for item in sublist]))
 
+        print('Completed: All ranches')
+
         return
 
     def fetch_single_branch(self, branch) -> list:
         """Fetches a single branch"""
 
-        url = f'https://www.bu.edu/academics/{branch}/courses/' 
+        print(f'Started: {self.branches[branch]}')
+
+        url = f'https://www.bu.edu/academics/{branch}/courses/'
         whole_branch = []
 
         for i in range(200):
@@ -87,12 +109,13 @@ class Scraper:
             content = BeautifulSoup(req.content, 'html.parser')
 
             results = content.find('ul', class_='course-feed')
-            if len(results.text.strip()) == 0:
+
+            if results is None or len(results.text.strip()) == 0:
                 break
 
             group = []
             for content in results:
-                tmp = content.next_sibling
+                tmp = content.next_sibling if content is not str else content
 
                 if tmp is None or len(tmp.text.strip()) == 0:
                     continue
@@ -104,10 +127,14 @@ class Scraper:
             for i in group:
                 whole_branch.append(i)
 
+        print(f'Completed: {self.branches[branch]}')
+
         return whole_branch
 
     def scrape_courses(self) -> None:
         """Scrapes all courses w/ multiprocessing"""
+
+        print('Started: All courses')
 
         with Pool() as pool:
             tmp = pool.map(self.fetch_single_course, self.class_list)
@@ -116,14 +143,15 @@ class Scraper:
 
         self.class_info = pd.DataFrame(tmp)
 
+        print('Completed: All courses')
+
         return
 
     def fetch_single_course(self, course: str) -> dict | bool:
         """Fetches a single course"""
 
-        code = [course[:3], course[3:5], course[5:]]
         url = f'https://www.bu.edu/phpbin/course-search/search.php?page=w0& \
-            pagesize=10&adv=1&search_adv_all={code[0]}+{code[1]}+{code[2]}&yearsem_adv=*'
+            pagesize=10&adv=1&search_adv_all={course}&yearsem_adv=*'
 
         content = BeautifulSoup(requests.get(url, timeout=(9.05, 27)).content, 'html.parser')
 
@@ -133,7 +161,7 @@ class Scraper:
             year = cur_datetime.year
 
             url = f'https://www.bu.edu/phpbin/course-search/search.php?page=w0&pagesize=10 \
-                &adv=1&search_adv_all={code[0]}+{code[1]}+{code[2]}&yearsem_adv={year}-{semester}'
+                &adv=1&search_adv_all={course}&yearsem_adv={year}-{semester}'
 
             content = BeautifulSoup(requests.get(url, timeout=(9.05, 27)).content, 'html.parser')
 
@@ -153,10 +181,10 @@ class Scraper:
         full = content.find('div', class_="coursearch-result-content-description")
 
         # Gets: [prereq, coreq,description, numerical credit]
-        try:
+        if full is not None:
             full_list = full.text.splitlines()
-            
-        except AttributeError:
+
+        else:
             return False
 
         full_dict = {
@@ -167,8 +195,6 @@ class Scraper:
             'credit': full_list[6],
             'hub_credit': hub_list[:]
         }
-
-        print(f'Finished scraping {course}')
 
         return self.cleaner(full_dict)
 
@@ -203,7 +229,7 @@ class Scraper:
 
                 try:
                     int(contents[i])
-                    
+
                 except ValueError:
                     if len(contents[i]) == 1 or len(contents[i]) == 0:
                         contents[i] = None
