@@ -50,6 +50,7 @@ class Scraper:
         self.scrape_branches()
         self.scrape_courses()
         self.create_csv()
+        self.push_to_bigquery()
 
     def push_to_bigquery(self) -> None:
         """Pushes the scraped data to BigQuery"""
@@ -92,7 +93,7 @@ class Scraper:
 
         self.class_list = list(set([item for sublist in self.class_list for item in sublist]))
 
-        print('Completed: All ranches')
+        print('Completed: All branches')
 
         return
 
@@ -196,59 +197,62 @@ class Scraper:
             'hub_credit': hub_list[:]
         }
 
-        return self.cleaner(full_dict)
+        return cleaner(full_dict)
 
-    def cleaner(self, contents: dict) -> dict:
-        """Cleans the contents of the course"""
+def cleaner(contents: dict) -> dict:
+    """Cleans the contents of the course"""
 
-        # Description cleaner
-        while True:
-            if '  ' in contents['description']:
-                contents['description'] = contents['description'].replace('  ', ' ')
-            else:
-                break
+    # Description cleaner
+    while '  ' in contents['description']:
+        contents['description'] = contents['description'].replace('  ', ' ')
 
-        # Credit cleaner
-        contents['credit'] = self.filter_numerical(contents['credit'])
 
-        # Removing the 'Prereq:' or 'Coreq:' from the respective entries
-        if 'Prereq:' in contents['prereq']:
-            contents['prereq'] = contents['prereq'].replace('Prereq:', '')
+    # Credit cleaner
+    contents['credit'] = filter_numerical(contents['credit'])
 
-        if 'Coreq:' in contents['coreq']:
-            contents['coreq'] = contents['coreq'].replace('Coreq:', '')
+    # Removing the 'Prereq:' or 'Coreq:' from the respective entries
+    if 'Prereq:' in contents['prereq']:
+        contents['prereq'] = contents['prereq'].replace('Prereq:', '')
 
-        # Switiching empty strings and arrays to None type, also removes extra whitespace
-        for i in contents:
-            if any([contents[i] == '', contents[i] == [], \
-                contents[i] == ['Part of a Hub sequence']]):
-                contents[i] = None
+    if 'Coreq:' in contents['coreq']:
+        contents['coreq'] = contents['coreq'].replace('Coreq:', '')
 
-            elif isinstance(contents[i], str):
-                contents[i] = contents[i].strip()
+    # Switiching empty strings and arrays to None type, also removes extra whitespace
+    for i in contents:
+        if any([contents[i] == '', contents[i] == [], \
+            contents[i] == ['Part of a Hub sequence']]):
+            contents[i] = None
 
-                try:
-                    int(contents[i])
+        elif isinstance(contents[i], str):
+            contents[i] = contents[i].strip()
 
-                except ValueError:
-                    if len(contents[i]) == 1 or len(contents[i]) == 0:
-                        contents[i] = None
+            try:
+                int(contents[i])
 
-        return contents
+            except ValueError:
+                if len(contents[i]) == 1 or len(contents[i]) == 0:
+                    contents[i] = None
 
-    def filter_numerical(self, string: str) -> str:
-        """Filters out all non-numerical characters from a string"""
+    return contents
 
-        result = ''
+def filter_numerical(string: str) -> str:
+    """Filters out all non-numerical characters from a string"""
 
-        if 'var' in string.lower():
-            return 'var'
+    result = ''
 
-        for char in string:
-            if char in '1234567890':
-                result += char
+    if 'var' in string.lower():
+        return 'var'
 
-        return result
+    for char in string:
+
+        try:
+            int(char)
+            result += char
+
+        except ValueError:
+            continue
+
+    return result
 
 
 if __name__ == '__main__':
